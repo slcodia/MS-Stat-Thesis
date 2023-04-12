@@ -1,0 +1,423 @@
+---
+title: "Hierarchical Spatial Interpolation of Extremes"
+author: "Siegfred Roi L. Codia"
+subtitle: Prerequisite to MS Stat Thesis
+output:
+  word_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+---
+
+## Importing Required Data
+
+### PH Provincial boundary data
+
+Data obtained from NAMRIA
+
+```{r message=FALSE}
+library(geojsonio)
+library(broom)
+provinces <- geojson_read("Data/Admin Boundaries/provinces.geojson",  what = "sp")
+provinces <- tidy(provinces)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+ph_map <- ggplot() +
+    geom_polygon(data = provinces,
+                 aes( x = long, y = lat,
+                      group = group), fill="gray") +
+    theme_void() +
+    coord_map()+
+    theme_bw()
+ph_map
+```
+
+### Rainfall data
+
+```{r message=FALSE}
+stations <- read_csv("NOAA PH Weather Stations.csv")
+max_data <- read_csv("max.spread.fixed.csv")
+```
+
+`max_data` contains annual rainfall maxima from each station obtained from NOAA GSOD server.
+
+`stations` data contains coordinates and historical maxima of each stations as posted by PAGASA
+
+```{r}
+ph_map +
+        geom_point(data = stations,
+                   aes(x = LON, y = LAT, color = `Rx1day (mm)`))+
+        scale_color_viridis_c()+
+    ggtitle("Historical Rainfall Maxima Recorded \nby PAGASA Stations")
+```
+
+### Digital Elevation Model data of the Philippines
+
+Data is obtained from [The Humanitarian Data Exchange](https://data.humdata.org/dataset/philippines-elevation-model "Philippines - Elevation Model")
+
+```{r}
+library(raster)
+grd_file <- raster("Data/PHL_ALT/PHL_msk_alt.grd")
+elev_df <- as.data.frame(rasterToPoints(grd_file))
+colnames(elev_df) <- c("x", "y", "ALT")
+```
+
+```{r}
+library(ggplot2)
+xlabs <- c(115, 120, 125, 130)
+ylabs <- c(5,10,15,20)
+ggplot()+
+    geom_tile(data = elev_df, aes(x = x, y = y, fill = ALT))+
+    scale_fill_gradientn(colors = terrain.colors(5))+
+    coord_fixed()+
+    theme_bw()+
+    xlab("LON") + ylab("LAT")+
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W'))+
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))+
+    theme(legend.title = element_blank(),
+          legend.key.width = unit(0.3, "cm"),
+          legend.key.height = unit(1.8, "cm"))+
+    ggtitle("Philippine Elevation in meters")
+```
+
+## **Fitting pointwise GEVD distributions**
+
+We first load the EnvStats package and create custom function to extract parameters directly.
+
+```{r message=FALSE}
+library(EnvStats)
+gevd_pars <- function(x){egevd(x)$parameters}
+```
+
+Now performing the estimation per column in the data frame.
+
+```{r warning=FALSE}
+parameters <- max_data[, -1]%>%sapply(gevd_pars) %>% t() %>% data.frame()
+```
+
+Creating the data frame that contains the GEVD parameters per weather station...
+
+```{r}
+parameters$"Station Name" <- row.names(parameters)
+stations_pars <- full_join(stations,parameters, by = "Station Name")
+stations_pars
+```
+
+### Visualization
+
+```{r}
+
+library(tidyverse)
+rp <- c("5-year", "50-year", "100-year")
+rl_gathered <- stations_pars |> 
+    mutate("5-year" = qgevd(1-1/5, location = location,
+                            scale = scale, shape = shape),
+           "50-year" = qgevd(1-1/50, location = location, 
+                            scale = scale, shape = shape),
+           "100-year" = qgevd(1-1/100, location = location, 
+                            scale = scale, shape = shape)) |> 
+    dplyr::select(`Station Name`, LAT, LON, all_of(rp)) |> 
+    pivot_longer(cols= rp, 
+                 names_to = "Return Period",
+                 values_to = "Return Level") |> 
+    mutate("Return Period" = ordered(`Return Period`, 
+                                     levels = rp))
+```
+
+```{r}
+ph_map +
+    geom_point(data = rl_gathered, aes(x = LON, y = LAT, color = `Return Level`))+
+    facet_wrap(.~`Return Period`)+
+    scale_color_viridis_c()+
+    theme_bw()+
+    ggtitle("Rainfall Return Level (mm) in the Philippines per weather station")+
+
+    xlab("LON") + ylab("LAT")+
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W'))+
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))+
+    theme(plot.title=element_text(hjust=0.5),
+          legend.title = element_blank(),
+          legend.key.width = unit(0.3, "cm"),
+          legend.key.height = unit(1.5, "cm"))
+```
+
+### Relationships of Altitude and the GEV parameters
+
+We also explore the relationship of Altitude and the estimated GEV parameters so we will have a basis if we will include them in the spatial interpolation models.
+
+```{r}
+stations_pars |> pivot_longer(cols = c(location, scale, shape),
+                              names_to = "parameter") |> 
+ggplot(aes(x = ALT, y = value))+
+    geom_point()+
+    geom_smooth(method = "lm", se = F)+
+    facet_wrap(.~parameter)
+```
+
+```{r}
+cor(stations_pars[,c("ALT","location","scale","shape")])
+```
+
+```{r}
+cor.test(stations_pars$ALT, stations_pars$location)
+```
+
+```{r}
+cor.test(stations_pars$ALT, stations_pars$scale)
+```
+
+While the location and scale parameters have a significant positive correlation with the altitude, we still decide **not to include altitude in spatial interpolation** of the parameters since the correlation coefficient is not high enough (weak to moderate correlation only). To add, the following linear regression outputs have a very low $R^2$ values.
+
+```{r}
+lm(location~ALT, data = stations_pars)%>%summary()
+```
+
+```{r}
+lm(scale~ALT, data = stations_pars)%>%summary()
+```
+
+## **Spatial Interpolation**
+
+Recall that the `stations_pars` data frame contains longitude and latitude coordinates of each weather station, and the corresponding estimated GEVD parameters of the annual maxima. This will be the source data for interpolation.
+
+Predictions will be made on the data frame `elev_df` which contains coordinates of Philippine land masses with cell size $0.0083^{\circ}W \times 0.0083^{\circ}N$.
+
+We will convert the two data frames to SpatialDataFrame for better data manipulation using functions for spatial data analysis.
+
+```{r}
+library(sp)
+# converting the dataframes to spatial data frames
+stations_pars_spdf <- SpatialPointsDataFrame(stations_pars,
+                                             coords = stations[,c("LON", "LAT")])
+elev_spdf <- SpatialPointsDataFrame(elev_df,
+                                             coords = elev_df[,c("x", "y")])
+```
+
+For a short demonstration of hierarchical spatial interpolation of extremes, we will perform three spatial interpolation procedures of the GEV parameters $\mu,\sigma,\xi$ .
+
+### **Inverse Distance Weighting**
+
+```{r message=FALSE}
+idw_loc   <- gstat::idw(location ~ 1, stations_pars_spdf, elev_spdf, idp = 2.0)
+idw_scale <- gstat::idw(scale ~ 1, stations_pars_spdf, elev_spdf, idp = 2.0)
+idw_shape <- gstat::idw(shape ~ 1, stations_pars_spdf, elev_spdf, idp = 2.0)
+```
+
+```{r}
+df_idw <- data.frame(x = elev_df$x, y = elev_df$y,
+                     location = idw_loc$var1.pred,
+                     scale = idw_scale$var1.pred,
+                     shape = idw_shape$var1.pred)
+```
+
+Computation of return level values
+
+```{r}
+library(EnvStats)
+
+rl_idw <- df_idw |> 
+    mutate("5-year" = qgevd(1-1/5, location = location,
+                            scale = scale, shape = shape),
+           "50-year" = qgevd(1-1/50, location = location, 
+                            scale = scale, shape = shape),
+           "100-year" = qgevd(1-1/100, location = location, 
+                            scale = scale, shape = shape)) |> 
+    dplyr::select(x, y, all_of(rp)) |> 
+    pivot_longer(cols= rp, 
+                 names_to = "Return Period",
+                 values_to = "Return Level") |> 
+    mutate("Return Period" = ordered(`Return Period`, levels = rp))
+rl_idw
+```
+
+```{r}
+ggplot()+
+    geom_tile(data = rl_idw, aes(x = x, y = y, fill = `Return Level`))+
+    scale_fill_viridis_c(limits = c(0, 1200), oob = scales::squish)+
+    coord_fixed()+
+    theme_bw()+
+    facet_wrap(.~`Return Period`)+
+    ggtitle("Rainfall Return Level (mm) in the Philippines using IDW")+
+    
+    xlab("LON") + ylab("LAT")+
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W'))+
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))+
+    theme(plot.title=element_text(hjust=0.5),
+          legend.title = element_blank(),
+          legend.key.width = unit(0.3, "cm"),
+          legend.key.height = unit(1.5, "cm"))
+```
+
+### **Kriging**
+
+We will perform an Ordinary Kriging. To determine which type of variogram will be used, the following checks are performed:
+
+```{r}
+library(gstat)
+v_loc <- variogram(location ~ 1, stations_pars_spdf)
+
+fit_loc_sph <- fit.variogram(v_loc, vgm(model = "Sph"))
+fit_loc_lin <- fit.variogram(v_loc, vgm(model = "Lin"))
+fit_loc_pow <- fit.variogram(v_loc, vgm(model = "Pow"))
+
+pred_sph <- gstat::krige(location ~ 1,
+                           stations_pars_spdf,
+                           stations_pars_spdf,
+                           model = fit_loc_sph)
+
+pred_lin <- gstat::krige(location ~ 1,
+                           stations_pars_spdf,
+                           stations_pars_spdf,
+                           model = fit_loc_lin)
+pred_pow <- gstat::krige(location ~ 1,
+                           stations_pars_spdf,
+                           stations_pars_spdf,
+                           model = fit_loc_pow)
+
+Metrics::rmse(stations_pars_spdf$location, pred_sph$var1.pred)
+Metrics::rmse(stations_pars_spdf$location, pred_lin$var1.pred)
+Metrics::rmse(stations_pars_spdf$location, pred_pow$var1.pred)
+
+Metrics::mae(stations_pars_spdf$location, pred_sph$var1.pred)
+Metrics::mae(stations_pars_spdf$location, pred_lin$var1.pred)
+Metrics::mae(stations_pars_spdf$location, pred_pow$var1.pred)
+```
+
+Spherical Model has the lowest RMSE and MAE. Hence, we will use Spherical Variogram Model Type in our Ordinary Kriging Spatial Interpolation of the parameters.
+
+```{r message=FALSE}
+
+v_loc <- variogram(location ~ ALT, stations_pars_spdf)
+plot(v_loc)
+fit_loc <- fit.variogram(v_loc, vgm(model = "Sph"))
+krig_loc   <- gstat::krige(location ~ 1,
+                           stations_pars_spdf,
+                           elev_spdf,
+                           model = fit_loc)
+
+v_scale <- variogram(scale ~ 1, stations_pars_spdf)
+fit_scale <- fit.variogram(v_scale, vgm(model = "Sph"))
+krig_scale <- gstat::krige(scale ~ 1,
+                           stations_pars_spdf,
+                           elev_spdf,
+                           model = fit_scale)
+
+v_shape <- variogram(shape ~ 1, stations_pars_spdf)
+fit_shape <- fit.variogram(v_shape, vgm(model = "Sph"))
+krig_shape <- gstat::krige(shape ~ 1,
+                           stations_pars_spdf,
+                           elev_spdf,
+                           model = fit_shape)
+```
+
+Creating data frame for interpolated values of the parameters.
+
+```{r}
+df_krig <- data.frame(x = elev_df$x, y = elev_df$y,
+                     location = krig_loc$var1.pred,
+                     scale = krig_scale$var1.pred,
+                     shape = krig_shape$var1.pred)
+```
+
+Computation of return level values
+
+```{r}
+rl_krig <- df_krig |> 
+     mutate("5-year" = qgevd(1-1/5, location = location,
+                            scale = scale, shape = shape),
+           "50-year" = qgevd(1-1/50, location = location, 
+                            scale = scale, shape = shape),
+           "100-year" = qgevd(1-1/100, location = location, 
+                            scale = scale, shape = shape)) |> 
+    dplyr::select(x, y, all_of(rp)) |> 
+    pivot_longer(cols= rp, 
+                 names_to = "Return Period",
+                 values_to = "Return Level") |> 
+    mutate("Return Period" = ordered(`Return Period`, levels = rp))
+rl_krig
+```
+
+Plotting return level values
+
+```{r}
+ggplot()+
+    geom_tile(data = rl_krig, aes(x = x, y = y, fill = `Return Level`))+
+    scale_fill_viridis_c(limits = c(0, 1200), oob = scales::squish)+
+    coord_fixed()+
+    theme_bw()+
+    facet_wrap(.~`Return Period`)+
+    ggtitle("Rainfall Return Level (mm) in the Philippines using Kriging")+
+    
+    xlab("LON") + ylab("LAT")+
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W'))+
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))+
+    theme(plot.title=element_text(hjust=0.5),
+          legend.title = element_blank(),
+          legend.key.width = unit(0.3, "cm"),
+          legend.key.height = unit(1.5, "cm"))
+```
+
+### **Spline**
+
+```{r message=FALSE, warning=FALSE}
+library(fields)
+
+spline_loc    <- Tps(coordinates(stations_pars_spdf),
+                    stations_pars_spdf$location, lambda = 0)
+spline_scale   <- Tps(coordinates(stations_pars_spdf),
+                    stations_pars_spdf$scale, lambda = 0)
+spline_shape   <- Tps(coordinates(stations_pars_spdf),
+                    stations_pars_spdf$shape, lambda = 0)
+```
+
+```{r}
+df_spline <- elev_df |> 
+    mutate(location = predict(spline_loc, coordinates(elev_spdf)),
+           scale  = predict(spline_scale, coordinates(elev_spdf)),
+           shape = predict(spline_shape, coordinates(elev_spdf)))
+
+```
+
+Computation of return level values
+
+```{r}
+rl_spline <- df_spline |> 
+    mutate("5-year" = qgevd(1-1/5, location = location,
+                            scale = scale, shape = shape),
+           "50-year" = qgevd(1-1/50, location = location, 
+                            scale = scale, shape = shape),
+           "100-year" = qgevd(1-1/100, location = location, 
+                            scale = scale, shape = shape)) |> 
+    dplyr::select(x, y, all_of(rp)) |> 
+    pivot_longer(cols= rp, 
+                 names_to = "Return Period",
+                 values_to = "Return Level") |> 
+    mutate("Return Period" = ordered(`Return Period`, levels = rp))
+```
+
+```{r}
+
+ggplot()+
+    geom_tile(data = rl_spline, aes(x = x, y = y, fill = `Return Level`))+
+    scale_fill_viridis_c(limits = c(0, 1200), oob = scales::squish)+
+    coord_fixed()+
+    theme_bw()+
+    facet_wrap(.~`Return Period`)+
+    ggtitle("Rainfall Return Level (mm) in the Philippines using Spline")+
+    
+    xlab("LON") + ylab("LAT")+
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W'))+
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))+
+    theme(plot.title=element_text(hjust=0.5),
+          legend.title = element_blank(),
+          legend.key.width = unit(0.3, "cm"),
+          legend.key.height = unit(1.5, "cm"))
+```
+
+In the spline interpolation, from the graphs, there is a tendency that this model will over estimate when it comes to extrapolation of values outside the study region
+
+

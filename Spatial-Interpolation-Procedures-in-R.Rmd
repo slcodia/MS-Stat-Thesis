@@ -1,0 +1,54 @@
+---
+title: "Spatial Interpolation procedures in R"
+output: html_notebook
+---
+
+# Introduction
+
+## Generating spatial data
+
+```{r}
+# Load the necessary libraries
+library(gstat)
+library(sp)
+
+# Create a spatial grid
+x <- seq(from = 0, to = 10, by = 0.5)
+y <- seq(from = 0, to = 10, by = 0.5)
+coords <- expand.grid(x = x, y = y)
+coordinates(coords) <- ~x + y
+
+# Generate some data
+set.seed(123)
+data <- data.frame(x = runif(50, 0, 10), y = runif(50, 0, 10), z = rnorm(50))
+
+# Create a spatial data frame
+coordinates(data) <- ~x + y
+```
+
+```{r}
+data
+```
+
+```{r}
+# visualizing the generated data
+install.packages("rayshader")
+library(rayshader)
+height_map <- rasterFromXYZ(as.data.frame(meuse[c("x", "y", "zinc")]))
+persp(x = x, y = y, z1, theta=-45, phi=35, r=5, expand=0.6, axes=T,
+      ticktype="detailed", xlab="x", ylab="y", zlab="z1")
+```
+
+# Inverse Distance Weighting
+
+```{r}
+plot(cars)
+```
+
+# Kriging
+
+# Spline
+
+```{r}
+
+```

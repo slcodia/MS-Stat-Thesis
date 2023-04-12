@@ -1,0 +1,712 @@
+---
+title: "Simulation of Spatial Extremes Data"
+author: "Siegfred Codia"
+date: "2022-11-26"
+output: html_document
+---
+
+# Simulation of Spatial Extremes Data
+
+This notebook shows how to simulate data from different extreme value distributions over a spatial region.
+
+# Assumptions
+
+1.  The spatial process follows a certain multivariate probability distribution
+2.  The parameters are non-stationary over space
+3.  The parameters follow a trend and are localized in space
+4.  The parameters are stationary over time
+
+For this example, we simulate spatial data over a 40 x 40 grid. The functions from `lcmix` library can sample from different multivariate distributions from gaussian copula.
+
+# Initialization
+
+The following will assist us in simulating a distribution over a spatial grid.
+
+### 40 x 40 grid
+
+Initializing the 40 x 40 grid and coordinates.
+
+```{r}
+xgrid <- (rep(1:40, times = 40))
+ygrid <- (rep(1:40, each = 40))
+locs  <- cbind(x = xgrid,
+               y = ygrid)
+
+
+# scaling such that values are from 0 to 1 for pairwise distances
+xgrid0 <- (xgrid-0.5)/40
+ygrid0 <- (ygrid-0.5)/40
+locs0  <- cbind(x = xgrid0,
+               y = ygrid0)
+# Pairwise distances of coordinates
+locs.dist0 <- as.matrix(dist(locs0))
+
+
+library(ggplot2)
+library(tidyverse)
+ggplot(data = as.data.frame(locs), aes(x = x, y = y))+
+    geom_point()+theme_bw()+coord_fixed()
+```
+
+### 
+
+### Gaussian Kernel
+
+We also introduce the Gaussian kernel which will assist us later in setting smoothened parameters over a spatial region. The Gaussian kernel on a 2D space is defined as
+
+$$
+K(x,y) = \exp\left\{{-\frac{(x-x_0)^2+(y-y_0)^2}{2\sigma^2}}\right\}
+$$
+
+where
+
+-   $x_0$ and $y_0$ is the center
+-   $\sigma$ is the width
+
+Note that $\frac{1}{2\pi\sigma^2}$ can be multiplied to normalize the kernel , i.e. area of $K(x,y)$ over all values of $x$ and $y$ is equal to $1$ . In our custom function, we put a multiplier $c$ which will determine the maximum value in a local point.
+
+```{r}
+gaus2D <- function(x, y, x0 = 0, y0 = 0,sigma = 1, 
+                   c = 1/(2*pi*sigma^2)){
+    c*exp(-((x-x0)^2+(y-y0)^2)/(2*sigma^2))}
+```
+
+### Matern Covariance Function
+
+In a spatial statistics, Matern Covariance function is used to specify covariance between two measurements as a function of distance between the points at which they are taken. The Matern covariance between measurements taken at two points separeted by $d$ distance units is given by
+
+$$
+C_\nu(d)=\sigma^2 \frac{2^{(1-\nu)}}{\Gamma(\nu)} \left(\sqrt{2\nu} \frac{d}{\alpha}\right)^\nu K_\nu\left(\sqrt{2\nu} \frac{d}{\alpha}\right)
+$$
+
+where
+
+-   $\sigma^2$ is the sill parameter
+-   $\alpha >0$ is the scale parameter.
+-   $\nu>0$ is a regularity parameter which determines the mean-square differentiability of the Gaussian field
+-   $\Gamma$ is the gamma function
+-   $K_\nu$ is the modified Bessel function of the second kind and order $\nu$
+
+```{r}
+# initial function: for creating covariance matrix
+cov_matern <- function(x, nu = 2, alpha = 1, vars=1){
+    if(nu == 0.5){
+        return(vars * exp(- x * alpha))
+    }
+
+    ismatrix <- is.matrix(x)
+
+    if(ismatrix){
+        nr = nrow(x)
+        nl = ncol(x)
+        }
+
+    x <- c(alpha * x)
+    output <- rep(1, length(x))
+    n <- sum(x > 0)
+
+    if(n > 0) {
+        x1 <- x[x > 0]
+        output[x > 0] <-
+            (1 / ((2^(nu - 1)) * gamma(nu))) * (x1^nu) * besselK(x1, nu)
+    }
+    if(ismatrix){
+        output <- matrix(output, nr, nl)
+    }
+    vars * output
+}
+```
+
+# Parameter Setting of Probability Distributions
+
+For this, we recall that the gaussian copula will assist in sampling of random values, and it is assumed that the annual maximum already has a certain distribution. The following distributions are the most common assumed distributions of annual rainfall maxima for flood modelling.
+
+-   Generalized Extreme Value (GEV)
+-   Log-Pearson Type III (LP3)
+-   Three-parameter Log-Normal (3LN)
+
+## 1. Generalized Extreme Value Distribution
+
+### Location Parameter $\mu$
+
+We first set the *hotspots* within the spatial region, centered on the following coordinates:
+
+1.  (27, 29)
+2.  (30, 11)
+3.  (9, 32)
+4.  (12, 15)
+
+```{r}
+library(ggforce)
+ggplot(data = as.data.frame(locs), aes(x = x, y = y))+xlim(1,40)+ylim(1,40)+
+    geom_point()+theme_bw()+coord_fixed()+
+    
+    geom_circle(aes(x0 = 28, y0 = 29, r = 12), color = "green", linewidth = 1)+
+    geom_label(aes(x = 28, y = 29, label = "1"), fill = "green")+
+    
+    geom_circle(aes(x0 = 30, y0 = 11, r = 10), color = "green", linewidth = 1)+
+    geom_label(aes(x = 30, y = 11, label = "2"), fill = "green")+
+    
+    geom_circle(aes(x0 = 9, y0 = 32, r = 8), color = "red", linewidth = 1) +
+    geom_label(aes(x = 9, y = 32, label = "3"), fill = "red")+
+    
+    geom_circle(aes(x0 = 12, y0 = 15, r = 11), color = "red", linewidth = 1)+
+    geom_label(aes(x = 12, y = 15, label = "4"), fill = "red")
+```
+
+Also, note that when analyzing extremes of rainfall data that follows a GEV distribution, it is logical that the location parameter is greater than 0. The Gaussian kernel outputs positive values, hence, it is appropriate to generate values of the location parameters. Furthermore, for this simulation, we arbitrarily set the minimum value of the location parameter at 50.
+
+Setting the values of the location parameters, we have the following:
+
+```{r}
+# setting minimum value of location parameter at 50
+mu0 <- rep(50, 40^2)
+
+# hotspots. 
+# recall: sigma is the width, c determines the peak value on the hotspot
+# hotspot 1
+mu1 <- gaus2D(x = xgrid, y = ygrid, 
+              x0 = 28, y0 = 29, 
+              sigma = 12, c = 140)
+max(mu1)
+
+# hotspot 2
+mu2 <- gaus2D(x = xgrid, y = ygrid, 
+              x0 = 30, y0 = 11, 
+              sigma = 10, c = 100)
+
+# hotspot 3
+mu3 <- gaus2D(x = xgrid, y = ygrid,  
+              x0 = 9, y0 = 32, 
+              sigma = 11, c = 120)
+
+# hotspot 4
+mu4 <- gaus2D(x = xgrid, y = ygrid, 
+              x0 = 12, y0 = 15, 
+              sigma = 10, c = 90)
+
+# Final vector of the location parameter
+mu0 <- matrixStats::rowMaxs(as.matrix(data.frame(mu0,mu1,mu2,mu3,mu4)))
+
+hist(mu0)
+```
+
+Final vector of location parameter is stored in `mu0`. We convert this to matrix `mu` for visualization.
+
+```{r}
+mu  <- matrix(mu0, ncol = 40)
+
+persp(x = 1:40, y = 1:40, mu, 
+      theta = -45, phi = 35, r = 5, expand = 0.5, axes = T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "mu")
+```
+
+### Scale Parameter $\sigma$
+
+For the scale parameter, we only set two local hotspots. Note that $\sigma$ should be always $>0$. For this simulation, we set 30 as the minimum value of the scale parameter.
+
+```{r}
+sigma0 <- rep(20, 40^2)
+sigma1 <- gaus2D(x = xgrid, y = ygrid, 
+                x0 = 38 , y0 = 18, sigma = 11, 
+                c = 30)+25
+sigma2 <- gaus2D(x = xgrid, y = ygrid, 
+                x0 = 30, y0 = 38, sigma = 10, 
+                c = 20)+20
+sigma0 <- matrixStats::rowMaxs(as.matrix(data.frame(sigma0, sigma1,sigma2)))
+hist(sigma0)
+```
+
+```{r}
+
+sigma <- matrix(sigma0, ncol = 40)
+persp(x=1:40, y=1:40,sigma , theta=-45, phi=35, r=5, expand = 0.6, axes=T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "sigma")
+```
+
+### Shape Parameter $\xi$
+
+The shape parameter $\xi$ determines the skewness of the distribution. For the case of GEVD, we have the following types:
+
+-   Type I: $(\xi\rightarrow0)$ Gumbell: $\Lambda(z) = e^{-e^{-\left(\frac{z-\mu}{\sigma}\right)}}, z\in\mathbb{R}$
+-   Type II: $(\xi>0)$ Fréchet : $\Phi_\xi(z)=\begin{cases}0, & z\leq\mu \\ e^{-\left(\frac{z-\mu}{\sigma}\right)^{-\frac{1}{\xi}}}, & z >\mu \end{cases}$
+-   Type III: $(\xi<0)$ Weibull: $\Psi_\xi(z)=\begin{cases}e^{-|\frac{z-\mu}{\sigma}|^{-\frac{1}{\xi}}}, & z < \mu \\ 1, & z \geq\mu \end{cases}$
+
+Note the following forms of Fréchet and Weibull distributions to approach the CDF of GEVD:
+
+-   $\Phi\left(\mu+\sigma+\xi\left(z-\mu\right)\right)$
+-   $\Psi\left(\mu-\sigma-\xi\left(z-\mu\right)\right)$
+
+Some additional notes for the shape parameter $\xi$ of the GEV distribution:
+
+-   Smith (1985) studied the problems in using likelihood methods for estimating GEV parameters
+    -   When $\xi >-0.5$, MLE are regular, in the sense of having the usual asymptotic properties
+
+    -   when $-1<\xi<-0.5$, MLE are generally obtainable, but do not have the standard asymptotic properties
+
+    -   when $\xi<-1$, MLE are unlikely to be obtainable
+
+    -   The case $\xi<-0.5$ corresponds to distributions with a very short bounded upper tail, and is a rare condition in applications of extreme value modelling. Estimating values in this range using maximum likelihood approach is usually not an obstacle in practice.
+-   $\xi$ determines the support and bounds of the distribution. $\mu-\sigma/\xi$ is the:
+    -   upper end-point of the distribution if $\xi<0$
+
+    -   lower end-point of the distribution if $\xi>0$
+
+From these points, we integrate ideas on analyzing extreme rainfall data, which is the main motivation of this study:
+
+1.  For MLE to be easily used for estimation, $\xi$ should be $>-0.5$
+2.  Rainfall has theoretically no upper bound, $\xi$ should be $>0$
+3.  To attain rainfall lower bound of 0, $\xi$ should be $>\sigma/\mu$
+
+Only the first two cases should be the strict conditions for rainfall data, since in analyzing rainfall extremes, we are interested in the upper tails of the distribution, not the lower tails, for the computation of rainfall return levels.
+
+Now, in setting the shape parameter $\xi$ over a spatial region, we will simulate from a multivariate normal distribution with dimension 1600, with values less than 0 are changed to 0, and spatial correlation characterized by a Matern Covariance matrix.
+
+```{r}
+set.seed(100)
+V2 <- cov_matern(locs.dist0, nu = 2, alpha=7*sqrt(3))
+xi0 <- MASS::mvrnorm(mu = rep(0, 1600), Sigma = V2)
+xi0[xi0 < 0] <- 0
+hist(xi0)
+```
+
+```{r}
+xi <- matrix(xi0, ncol=40)
+persp(x = 1:40, y=1:40, z = xi, 
+      theta=-45, phi=35, r=5, expand = 0.6, axes=T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "xi")
+```
+
+### Simulation of GEVD
+
+The following is custom function that can simulate a multivariate GEV distribution based on a Gaussian copula
+
+```{r}
+rmvgevd <- function(n, location = 0, scale=1, shape=1, corr=diag(length(shape)))
+{
+    ## extract parameters, do sanity checks, deal with univariate case
+        
+        # correlation matrix
+        if(!is.matrix(corr) || !isSymmetric(corr))
+            stop("'corr' must be a symmetric matrix")
+        D = ncol(corr) # dimension of correlation matrix
+        
+        # location
+        Dl = length(location)
+        if(Dl > D)
+            warning("'location' longer than width of 'corr', truncating to fit")
+        if(Dl != D)
+            location = rep(location, length.out = D)
+        
+        # scale
+        Dsc = length(scale)
+        if(Dsc > D)
+            warning("'scale' longer than width of 'corr', truncating to fit")
+        if(Dl != D)
+            scale = rep(scale, length.out = D)
+        
+        # shape
+        Dsh = length(shape)
+        if(Dsh > D)
+            warning("'shape' longer than width of 'corr', truncating to fit")
+        if(Dsh != D)
+            shape = rep(shape, length.out=D)
+    
+    # for case that dimension of corr is 1, we generate from univariate distribution
+    if(D == 1) EnvStats::rgevd(n, location, scale, shape)
+    
+         
+    ## generate standard multivariate normal matrix, convert to CDF
+    
+    Z = MASS::mvrnorm(mu = rep(0, n), Sigma=corr)
+    cdf = pnorm(Z)
+    
+    ## convert to GEVD, return
+    
+    sapply(1:D, function(d) EnvStats::qgevd(cdf[d], location[d], scale[d], shape[d]))
+}
+
+```
+
+```{r}
+set.seed(100)
+V2 <- cov_matern(locs.dist0, nu = 2, alpha=7*sqrt(3))
+rgevd1 <- rmvgevd(n = 1600, location = mu, scale = sigma, shape = xi, corr = V2)
+rgevd2 <- rmvgevd(n = 1600, location = mu, scale = sigma, shape = xi, corr = V2)
+rgevd3 <- rmvgevd(n = 1600, location = mu, scale = sigma, shape = xi, corr = V2)
+
+```
+
+```{r}
+rgevd1 <- matrix(rgevd1, ncol=40)
+rgevd2 <- matrix(rgevd2, ncol=40)
+rgevd3 <- matrix(rgevd3, ncol=40)
+
+# we temporarily store these data to an 3D array
+rgevd.sim.temp <- array(c(rgevd1,rgevd2,rgevd3), 
+                   dim = c(40,40,3))
+
+# visualizing
+persp(x=1:40, y = 1:40, z = rgevd.sim.temp[,,1], 
+      theta = -45, phi = 35, r = 5, expand = 0.6, axes = T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "rgevd1")
+persp(x=1:40, y=1:40, z = rgevd.sim.temp[,,2], 
+      theta = -45, phi = 35, r = 5, expand = 0.6, axes = T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "rgevd2")
+persp(x=1:40, y=1:40, z = rgevd.sim.temp[,,3], 
+      theta = -45, phi = 35, r = 5, expand = 0.6, axes = T,
+      ticktype = "detailed", xlab = "x", ylab = "y", zlab = "rgevd3")
+```
+
+The above algorithms and graph are only demonstrations for a single simulation. Now, we will simulate multiple multivariate GEVD $K$ times, which represent $K$ years worth of annual maxima data. We will store the data on a 3-dimensional array with $x$ and $y$ as spatial dimensions, and $t$ for time dimension.
+
+```{r}
+ptm <- Sys.time()
+set.seed(100)
+K = 100
+# initializing empty 3D array
+rgevd.sim <- array(rep(matrix(rep(NA,40^2), ncol = 40),K), 
+                   dim = c(40,40,K))
+
+for (k in 1:K){
+    rgevd.sim[,,k] <- rmvgevd(n = 40^2,
+                              location = mu, scale = sigma, shape = xi, 
+                              corr = V2)
+}
+Sys.time() - ptm
+
+```
+
+```{r}
+library(EnvStats)
+# using MLE to estimate parameters on coordinate [1,1]
+ggplot(data.frame(Z = rgevd.sim[1,1,]), aes(x = Z))+
+            geom_histogram(aes(y = ..density..), 
+                        bins = 20,fill="white", colour = "black")+
+            theme_bw()+
+            xlab("Z")+
+    ggtitle("PDF at coordinate (1,1)")+
+    stat_function(aes(color = "Theoretical"),
+                  fun = dgevd, 
+                  args = list(location = mu[1,1], 
+                              scale = sigma[1,1], 
+                              shape = xi[1,1]))+
+    stat_function(aes(color = "Fitted (MLE)"),
+                  fun = dgevd, 
+                  args = list(location = egevd(rgevd.sim[1,1,])$parameter[1],
+                              scale = egevd(rgevd.sim[1,1,])$parameter[2],
+                              shape = egevd(rgevd.sim[1,1,])$parameter[3]))+
+    scale_color_manual(values = c("Theoretical" = "red",
+                                  "Fitted (MLE)" = "blue"))
+```
+
+```{r}
+ggplot(data.frame(Z = rgevd.sim[8,23,]), aes(x = Z))+
+            geom_histogram(aes(y = ..density..), 
+                        bins = 20,fill="white", colour = "black")+
+            theme_bw()+
+            xlab("Z")+
+    ggtitle("PDF at coordinate (8,23)")+
+    stat_function(aes(color = "Theoretical"),
+                  fun = dgevd, 
+                  args = list(location = mu[8,23], 
+                              scale = sigma[8,23], 
+                              shape = xi[8,23]))+
+    stat_function(aes(color = "Fitted (MLE)"),
+                  fun = dgevd, 
+                  args = list(location = egevd(rgevd.sim[8,23,])$parameter[1],
+                              scale = egevd(rgevd.sim[8,23,])$parameter[2],
+                              shape = egevd(rgevd.sim[8,23,])$parameter[3]))+
+    scale_color_manual(values = c("Theoretical" = "red",
+                                  "Fitted (MLE)" = "blue"))
+```
+
+Using Goodness-of-fit test, we check if the generated data follow the theoretical distribution:
+
+```{r}
+
+```
+
+## 2. Log-Pearson Type III (LP3)
+
+\*\* TO FOLLOW \*\*
+
+## 3. Three-parameter Log-Normal (3LN)
+
+\*\* TO FOLLOW \*\*
+
+```{r}
+library(EnvStats)
+
+lognorm <- rlnorm(1600, meanlog = 1, sdlog = 1)
+tpln0 <- rlnorm3(1600, meanlog = 1, sdlog = 1, threshold = 0)
+tpln25 <- rlnorm3(1600, meanlog = 1, sdlog = 1, threshold = 25)
+tpln50 <- rlnorm3(1600, meanlog = 1, sdlog = 1, threshold = 50)
+
+```
+
+```{r}
+ggplot(data.frame(lognorm, tpln0, tpln25, tpln50))+
+    geom_histogram(aes(x=lognorm, y = ..density..), fill = "green", alpha = 0.2)+
+    geom_histogram(aes(x=tpln0, y = ..density..), fill = "orange", alpha = 0.2)+
+    geom_histogram(aes(x=tpln25, y = ..density..), fill = "blue")+
+    geom_histogram(aes(x=tpln50, y = ..density..), fill = "red")
+```
+
+```{r}
+hist(exp(rnorm(1600,0,1)))
+```
+
+```{r}
+hist(rlnorm(1600, meanlog = 0, sdlog = 1))
+```
+
+### 
+
+# Number of Spatial Units (Station Density)
+
+Note that in selecting the location of spatial units, all of them should have at least 1 unit of distance between them, horizontally, vertically, or diagonally.
+
+```{r}
+xgrid_samp <- (rep(1:7, times = 7))
+ygrid_samp <- (rep(1:7, each = 7))
+
+locs_samp  <- data.frame(x = xgrid_samp, y = ygrid_samp)
+locs_samp$station1 <- "missing"
+locs_samp[locs_samp$x==1 & locs_samp$y==2,]$station1 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==6,]$station1 <- "exists"
+locs_samp[locs_samp$x==2 & locs_samp$y==4,]$station1 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==1,]$station1 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==7,]$station1 <- "exists"
+locs_samp[locs_samp$x==4 & locs_samp$y==4,]$station1 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==1,]$station1 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==7,]$station1 <- "exists"
+locs_samp[locs_samp$x==6 & locs_samp$y==4,]$station1 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==2,]$station1 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==6,]$station1 <- "exists"
+
+
+locs_samp$station2 <- "missing"
+locs_samp[locs_samp$x==1 & locs_samp$y==7,]$station2 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==5,]$station2 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==3,]$station2 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==1,]$station2 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==7,]$station2 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==5,]$station2 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==3,]$station2 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==1,]$station2 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==7,]$station2 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==5,]$station2 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==3,]$station2 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==1,]$station2 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==7,]$station2 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==5,]$station2 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==3,]$station2 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==1,]$station2 <- "exists"
+
+locs_samp$station3 <- "missing"
+locs_samp[locs_samp$x==1 & locs_samp$y==7,]$station3 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==5,]$station3 <- "exists"
+locs_samp[locs_samp$x==1 & locs_samp$y==2,]$station3 <- "exists"
+
+locs_samp[locs_samp$x==3 & locs_samp$y==4,]$station3 <- "exists"
+locs_samp[locs_samp$x==3 & locs_samp$y==1,]$station3 <- "exists"
+
+locs_samp[locs_samp$x==4 & locs_samp$y==7,]$station3 <- "exists"
+
+locs_samp[locs_samp$x==5 & locs_samp$y==5,]$station3 <- "exists"
+locs_samp[locs_samp$x==5 & locs_samp$y==3,]$station3 <- "exists"
+
+locs_samp[locs_samp$x==6 & locs_samp$y==1,]$station3 <- "exists"
+
+locs_samp[locs_samp$x==7 & locs_samp$y==7,]$station3 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==5,]$station3 <- "exists"
+locs_samp[locs_samp$x==7 & locs_samp$y==3,]$station3 <- "exists"
+
+```
+
+```{r}
+ggplot(data = locs_samp, aes(x = x, y = y, color = station1))+
+    geom_point(size=10)+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))+
+    theme(legend.position="top")
+
+ggplot(data = locs_samp, aes(x = x, y = y, color = station2))+
+    geom_point(size=10)+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))+
+    theme(legend.position="top")
+
+ggplot(data = locs_samp, aes(x = x, y = y, color = station3))+
+    geom_point(size=10)+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))+
+    theme(legend.position="top")
+```
+
+```{r}
+set.seed(120)
+locs_df <- as.data.frame(locs)
+
+locs_df$station <- rep("missing", 1600)
+samp <- sort(sample(1600, size = 100))
+locs_df[samp,]$station <- "exists"
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))
+```
+
+With this, we manually relocate points that are close to each other.
+
+```{r}
+locs_df[locs_df$x == 10 & locs_df$y == 17,"station"] <- "for relocation"
+locs_df[locs_df$x == 11 & locs_df$y == 17,"station"] <- "for relocation"
+locs_df[locs_df$x == 13 & locs_df$y == 16,"station"] <- "for relocation"
+locs_df[locs_df$x == 14 & locs_df$y == 11,"station"] <- "for relocation"
+locs_df[locs_df$x == 14 & locs_df$y == 24,"station"] <- "for relocation"
+locs_df[locs_df$x == 14 & locs_df$y == 32,"station"] <- "for relocation"
+locs_df[locs_df$x == 15 & locs_df$y == 27,"station"] <- "for relocation"
+locs_df[locs_df$x == 21 & locs_df$y ==  9,"station"] <- "for relocation"
+locs_df[locs_df$x == 21 & locs_df$y == 18,"station"] <- "for relocation"
+locs_df[locs_df$x == 23 & locs_df$y ==  9,"station"] <- "for relocation"
+locs_df[locs_df$x == 27 & locs_df$y == 11,"station"] <- "for relocation"
+locs_df[locs_df$x == 27 & locs_df$y == 23,"station"] <- "for relocation"
+locs_df[locs_df$x == 29 & locs_df$y == 18,"station"] <- "for relocation"
+locs_df[locs_df$x == 30 & locs_df$y == 17,"station"] <- "for relocation"
+locs_df[locs_df$x == 32 & locs_df$y == 22,"station"] <- "for relocation"
+locs_df[locs_df$x == 34 & locs_df$y == 18,"station"] <- "for relocation"
+locs_df[locs_df$x == 34 & locs_df$y == 32,"station"] <- "for relocation"
+locs_df[locs_df$x == 34 & locs_df$y == 37,"station"] <- "for relocation"
+locs_df[locs_df$x == 36 & locs_df$y == 30,"station"] <- "for relocation"
+locs_df[locs_df$x == 39 & locs_df$y == 23,"station"] <- "for relocation"
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black",
+                                  "for relocation" = "red"))
+```
+
+20 stations are for relocation.
+
+```{r}
+locs_df[locs_df$x ==  1 & locs_df$y == 40,"station"] <- "new location"
+locs_df[locs_df$x ==  3 & locs_df$y == 38,"station"] <- "new location"
+locs_df[locs_df$x ==  5 & locs_df$y == 35,"station"] <- "new location"
+locs_df[locs_df$x ==  6 & locs_df$y ==  7,"station"] <- "new location"
+locs_df[locs_df$x ==  7 & locs_df$y == 11,"station"] <- "new location"
+locs_df[locs_df$x ==  8 & locs_df$y == 31,"station"] <- "new location"
+locs_df[locs_df$x == 17 & locs_df$y ==  6,"station"] <- "new location"
+locs_df[locs_df$x == 18 & locs_df$y == 16,"station"] <- "new location"
+locs_df[locs_df$x == 21 & locs_df$y == 29,"station"] <- "new location"
+locs_df[locs_df$x == 21 & locs_df$y == 40,"station"] <- "new location"
+locs_df[locs_df$x == 23 & locs_df$y ==  5,"station"] <- "new location"
+locs_df[locs_df$x == 23 & locs_df$y == 25,"station"] <- "new location"
+locs_df[locs_df$x == 25 & locs_df$y == 16,"station"] <- "new location"
+locs_df[locs_df$x == 27 & locs_df$y == 39,"station"] <- "new location"
+locs_df[locs_df$x == 31 & locs_df$y ==  3,"station"] <- "new location"
+locs_df[locs_df$x == 32 & locs_df$y == 11,"station"] <- "new location"
+locs_df[locs_df$x == 38 & locs_df$y == 34,"station"] <- "new location"
+locs_df[locs_df$x == 39 & locs_df$y ==  2,"station"] <- "new location"
+locs_df[locs_df$x == 40 & locs_df$y == 19,"station"] <- "new location"
+locs_df[locs_df$x == 40 & locs_df$y == 39,"station"] <- "new location"
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black",
+                                  "for relocation" = "red",
+                                  "new location" = "blue"))
+```
+
+Final set of locations
+
+```{r}
+locs_df[locs_df$x == 10 & locs_df$y == 17,"station"] <- "missing"
+locs_df[locs_df$x == 11 & locs_df$y == 17,"station"] <- "missing"
+locs_df[locs_df$x == 13 & locs_df$y == 16,"station"] <- "missing"
+locs_df[locs_df$x == 14 & locs_df$y == 11,"station"] <- "missing"
+locs_df[locs_df$x == 14 & locs_df$y == 24,"station"] <- "missing"
+locs_df[locs_df$x == 14 & locs_df$y == 32,"station"] <- "missing"
+locs_df[locs_df$x == 15 & locs_df$y == 27,"station"] <- "missing"
+locs_df[locs_df$x == 21 & locs_df$y ==  9,"station"] <- "missing"
+locs_df[locs_df$x == 21 & locs_df$y == 18,"station"] <- "missing"
+locs_df[locs_df$x == 23 & locs_df$y ==  9,"station"] <- "missing"
+locs_df[locs_df$x == 27 & locs_df$y == 11,"station"] <- "missing"
+locs_df[locs_df$x == 27 & locs_df$y == 23,"station"] <- "missing"
+locs_df[locs_df$x == 29 & locs_df$y == 18,"station"] <- "missing"
+locs_df[locs_df$x == 30 & locs_df$y == 17,"station"] <- "missing"
+locs_df[locs_df$x == 32 & locs_df$y == 22,"station"] <- "missing"
+locs_df[locs_df$x == 34 & locs_df$y == 18,"station"] <- "missing"
+locs_df[locs_df$x == 34 & locs_df$y == 32,"station"] <- "missing"
+locs_df[locs_df$x == 34 & locs_df$y == 37,"station"] <- "missing"
+locs_df[locs_df$x == 36 & locs_df$y == 30,"station"] <- "missing"
+locs_df[locs_df$x == 39 & locs_df$y == 23,"station"] <- "missing"
+
+locs_df[locs_df$x ==  1 & locs_df$y == 40,"station"] <- "exists"
+locs_df[locs_df$x ==  3 & locs_df$y == 38,"station"] <- "exists"
+locs_df[locs_df$x ==  5 & locs_df$y == 35,"station"] <- "exists"
+locs_df[locs_df$x ==  6 & locs_df$y ==  7,"station"] <- "exists"
+locs_df[locs_df$x ==  7 & locs_df$y == 11,"station"] <- "exists"
+locs_df[locs_df$x ==  8 & locs_df$y == 31,"station"] <- "exists"
+locs_df[locs_df$x == 17 & locs_df$y ==  6,"station"] <- "exists"
+locs_df[locs_df$x == 18 & locs_df$y == 16,"station"] <- "exists"
+locs_df[locs_df$x == 21 & locs_df$y == 29,"station"] <- "exists"
+locs_df[locs_df$x == 21 & locs_df$y == 40,"station"] <- "exists"
+locs_df[locs_df$x == 23 & locs_df$y ==  5,"station"] <- "exists"
+locs_df[locs_df$x == 23 & locs_df$y == 25,"station"] <- "exists"
+locs_df[locs_df$x == 25 & locs_df$y == 16,"station"] <- "exists"
+locs_df[locs_df$x == 27 & locs_df$y == 39,"station"] <- "exists"
+locs_df[locs_df$x == 31 & locs_df$y ==  3,"station"] <- "exists"
+locs_df[locs_df$x == 32 & locs_df$y == 11,"station"] <- "exists"
+locs_df[locs_df$x == 38 & locs_df$y == 34,"station"] <- "exists"
+locs_df[locs_df$x == 39 & locs_df$y ==  2,"station"] <- "exists"
+locs_df[locs_df$x == 40 & locs_df$y == 19,"station"] <- "exists"
+locs_df[locs_df$x == 40 & locs_df$y == 39,"station"] <- "exists"
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))+
+    ggtitle("Location of 100 stations")
+```
+
+```{r}
+set.seed(120)
+samp_70 <- sample(which(locs_df$station == "exists"),70)
+locs_df$station_70 <- rep("missing", 1600)
+locs_df[samp_70,]$station_70 <- "exists"
+
+samp_40 <- sample(which(locs_df$station == "exists"),40)
+locs_df$station_40 <- rep("missing", 1600)
+locs_df[samp_40,]$station_40 <- "exists"
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station_70))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))
+```
+
+```{r}
+table(locs_df$station_70)
+```
+
+```{r}
+ggplot(data = locs_df, aes(x = x, y = y, color = station_40))+
+    geom_point()+theme_bw()+coord_fixed()+
+    scale_color_manual(values = c("missing" = "gray",
+                                  "exists" = "black"))
+```

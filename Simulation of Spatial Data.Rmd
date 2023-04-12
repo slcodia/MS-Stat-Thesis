@@ -1,0 +1,175 @@
+---
+title: "Simulation of Spatial Data"
+author: "Siegfred Codia"
+output: html_notebook
+---
+
+For this example, we simulate normal data over a 40 x 40 grid. The function `mvnorm` from `MASS` library can sample from a multivariate normal distribution. Note that the simulated data assumes spatial stationarity and isotropy.
+
+## Initialization
+
+In a spatial statistics, Matern Covariance function is commonly used. Matern covariance function specifies covariance between two measurements as a function of distance between the points at which they are taken. The Matern covariance between measurements taken at two points separeted by $d$ distance units is given by
+
+$$
+C_\nu(d)=\sigma^2 \frac{2^{(1-\nu)}}{\Gamma(\nu)} \left(\sqrt{2\nu} \frac{d}{\alpha}\right)^\nu K_\nu\left(\sqrt{2\nu} \frac{d}{\alpha}\right)
+$$
+
+where
+
+-   $\sigma^2$ is the sill parameter
+-   $\alpha >0$ is the scale parameter
+-   $\nu>0$ is a regularity (smoothness) parameter which determines the mean-square differentiability of the Gaussian field. It measures number of mean square derivatives and is equivalent to the polynomial tail behavior of the spectral density. When
+    -   $\nu$ = 0.5 $\rightarrow$ Matern is an exponential covariance
+
+    -   $\nu=\infty \rightarrow$ Matern is Gaussian covariance
+-   $\Gamma$ is the gamma function
+-   $K_\nu$ is the modified Bessel function of the second kind and order $\nu$
+
+```{r}
+# initial function: for creating covariance matrix
+cov_matern <- function(x, nu = 2, alpha = 1, vars=1){
+    if(nu == 0.5){
+        return(vars*exp( - x * alpha))
+    }
+    
+    ismatrix <- is.matrix(x)
+    
+    if(ismatrix){
+        nr=nrow(x)
+        nl=ncol(x)
+        }
+    
+    x <- c(alpha * x)
+    output <- rep(1, length(x))
+    n <- sum(x > 0)
+    
+    if(n > 0) {
+        x1 <- x[x > 0]
+        output[x > 0] <-
+            (1/((2^(nu - 1)) * gamma(nu))) * (x1^nu) * besselK(x1, nu)
+    }
+    if(ismatrix){
+        output <- matrix(output, nr, nl)
+    }
+    vars*output
+}
+```
+
+### Conversion of coordinates to index
+
+The following is a function that converts coordinates to index from the vector of simulated data:
+
+$$
+index = 40(y - 1)+x
+$$
+
+```{r}
+coord0 <- function(x,y){40 * (y - 1) + x}
+```
+
+### 
+
+Loading packages `MASS` for simulation of multivariate normal distribution and `ggplot2` for some visualization.
+
+```{r warning=TRUE}
+library(MASS)
+library(ggplot2)
+```
+
+Initializing the 40 x 40 grid and coordinates.
+
+```{r}
+xgrid0 <- (rep(1:40, each = 40)-0.5)/40
+ygrid0 <- (rep(1:40, times = 40)-0.5)/40
+locs0  <- cbind(x = xgrid0,
+               y = ygrid0)
+# Pairwise distances of coordinates
+locs.dist0 <- as.matrix(dist(locs0))
+
+ggplot(data = as.data.frame(locs0), aes(x = x, y = y))+
+    geom_point()+theme_bw()+coord_fixed()
+```
+
+## Simulation 1: $\nu=\frac{1}{2}, \alpha=7\sqrt{3}$
+
+```{r}
+V1 <- cov_matern(locs.dist0, nu=1/2, alpha=7*sqrt(3))
+set.seed(20)
+z1 <- MASS::mvrnorm(mu=rep(0, 40^2), Sigma=V1)
+z1 <- matrix(z1, ncol=40)
+```
+
+```{r}
+persp(x = (1:40-0.5)/40, y = (1:40-0.5)/40, z1, theta=-45, phi=35, r=5, expand=0.6, axes=T,
+      ticktype="detailed", xlab="x", ylab="y", zlab="z1")
+```
+
+```{r}
+filled.contour(x=((1:40)-0.5)/40, y=((1:40)-0.5)/40, z1, color.palette=gray.colors)
+```
+
+## Simulation 2: $\nu=2, \alpha=7\sqrt{3}$
+
+```{r}
+V2 <- cov_matern(as.matrix(dist(locs0)), nu = 2, alpha=7*sqrt(3))
+z2 <- MASS::mvrnorm(mu=rep(0, 40^2), Sigma=V2)
+z2 <- matrix(z2, ncol=40)
+```
+
+```{r}
+persp(x=((1:40)-0.5)/40, y=((1:40)-0.5)/40, z2, 
+      theta=-45, phi=35, r=5, expand=0.6, axes=T,
+      ticktype="detailed", xlab="x", ylab="y", zlab="z2")
+```
+
+```{r}
+filled.contour(x=((1:40)-0.5)/40, y=((1:40)-0.5)/40, z2, color.palette=gray.colors)
+```
+
+## Simulation 3: $\nu=10, \alpha=7\sqrt{3}$
+
+```{r}
+V3 <- cov_matern(as.matrix(dist(locs0)),nu=10, alpha =7*sqrt(3))
+set.seed(100)
+z3 <- MASS::mvrnorm(mu = rep(0, 40^2), Sigma=V3)
+z3 <- matrix(z3, ncol=40)
+```
+
+```{r}
+persp(x=((1:40)-0.5)/40, y=((1:40)-0.5)/40, z3, theta=-45, phi=35, r=5, expand=0.6, 
+      axes=T,ticktype="detailed", xlab="x", ylab="y", zlab="z")
+```
+
+```{r}
+filled.contour(x = ((1:40)-0.5)/40, y = ((1:40)-0.5)/40, z3, color.palette=gray.colors)
+```
+
+## Creating a GIF
+
+```{r}
+library(lattice)
+wireframe(z3, shade = TRUE,distance=0,
+        screen=list(z=50,x=-60),
+        xlab="",ylab="",zlab="",scales=list(draw=FALSE))
+```
+
+```{r}
+draw.plot <- function(data,angles)
+{
+  for(i in 1:length(angles))
+  {
+    print(wireframe(data, shade = TRUE,distance=0,
+        screen=list(z=angles[i],x=-60),
+        xlab="",ylab="",zlab="",scales=list(draw=FALSE)))
+    setTxtProgressBar(txtProgressBar(style=3),i/length(angles))
+  }
+}
+angles <- seq(from = 1,to = 360, by=1)
+```
+
+```{r}
+library(animation)
+saveGIF(draw.plot(z3,angles), interval = 1/10, 
+        movie.name = "z3.GIF", 
+        ani.height = 640, ani.width = 640)
+```
